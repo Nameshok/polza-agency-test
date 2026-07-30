@@ -2,6 +2,13 @@
  * Разбор CSV по RFC 4180: кавычки, запятые внутри кавычек, "" как экранированная кавычка,
  * CRLF и LF. Внешний парсер тут не нужен, а свой заодно даёт то, чего у готовых обычно нет:
  * номер физической строки файла для каждой записи — он потом попадает в отчёт об аномалиях.
+ *
+ * Парсер намеренно строгий в двух местах, потому что «мягкий» разбор здесь опаснее ошибки:
+ *  - файл, кончившийся внутри открытой кавычки;
+ *  - мусор после закрывающей кавычки (`"ООО Ромашка"x`) — по RFC там допустимы только
+ *    запятая или конец записи, а склеивание дало бы имя «ООО Ромашкаx», и такая компания
+ *    молча уехала бы в базу.
+ * Обе ситуации попадают в malformed с причиной, а не исправляются на глаз.
  */
 
 export interface CsvRow {
@@ -10,20 +17,37 @@ export interface CsvRow {
   values: string[];
 }
 
+export interface MalformedRow {
+  line: number;
+  expected: number;
+  actual: number;
+  values: string[];
+  /** почему строка не принята: пригодится в отчёте об аномалиях */
+  reason: string;
+}
+
 export interface CsvFile {
   header: string[];
   rows: CsvRow[];
-  /** строки, где число колонок не совпало с заголовком */
-  malformed: Array<{ line: number; expected: number; actual: number; values: string[] }>;
+  malformed: MalformedRow[];
+}
+
+interface RawRecord {
+  line: number;
+  values: string[];
+  /** нарушение синтаксиса внутри записи, а не просто неверное число колонок */
+  reason?: string;
 }
 
 export function parseCsv(text: string): CsvFile {
   const withoutBom = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
-  const records: Array<{ line: number; values: string[] }> = [];
+  const records: RawRecord[] = [];
 
   let field = '';
   let values: string[] = [];
   let inQuotes = false;
+  let justClosedQuote = false;
+  let recordReason: string | undefined;
   let line = 1;
   let recordStartLine = 1;
   let sawAnyChar = false;
@@ -31,11 +55,13 @@ export function parseCsv(text: string): CsvFile {
   const pushField = () => {
     values.push(field);
     field = '';
+    justClosedQuote = false;
   };
   const pushRecord = () => {
     pushField();
-    records.push({ line: recordStartLine, values });
+    records.push({ line: recordStartLine, values, reason: recordReason });
     values = [];
+    recordReason = undefined;
     recordStartLine = line + 1;
   };
 
@@ -49,6 +75,7 @@ export function parseCsv(text: string): CsvFile {
           i += 1;
         } else {
           inQuotes = false;
+          justClosedQuote = true;
         }
       } else {
         if (char === '\n') line += 1;
@@ -74,42 +101,35 @@ export function parseCsv(text: string): CsvFile {
       sawAnyChar = false;
       continue;
     }
+
+    // Обычный символ. Если он идёт сразу за закрывающей кавычкой — запись битая.
+    if (justClosedQuote) {
+      recordReason ??= 'junk_after_closing_quote';
+      justClosedQuote = false;
+    }
     field += char;
     sawAnyChar = true;
   }
 
-  // последняя строка без завершающего перевода строки
-  const unterminatedQuote = inQuotes;
-  if (sawAnyChar || field !== '' || values.length > 0) pushRecord();
+  if (inQuotes) recordReason ??= 'unterminated_quote';
+  if (sawAnyChar || field !== '' || values.length > 0 || recordReason) pushRecord();
 
   const first = records.shift();
   if (!first) return { header: [], rows: [], malformed: [] };
 
   const header = first.values.map((h) => h.trim());
   const rows: CsvRow[] = [];
-  const malformed: CsvFile['malformed'] = [];
-
-  // Файл кончился внутри открытой кавычки: последняя запись собрана из остатка файла
-  // и данными считаться не может. Молча принять её — значит загрузить мусор как компанию.
-  if (unterminatedQuote) {
-    const broken = records.pop();
-    if (broken) {
-      malformed.push({
-        line: broken.line,
-        expected: header.length,
-        actual: broken.values.length,
-        values: broken.values,
-      });
-    }
-  }
+  const malformed: MalformedRow[] = [];
 
   for (const record of records) {
-    if (record.values.length !== header.length) {
+    if (record.reason || record.values.length !== header.length) {
       malformed.push({
         line: record.line,
         expected: header.length,
         actual: record.values.length,
         values: record.values,
+        reason:
+          record.reason ?? `column_count_${record.values.length}_expected_${header.length}`,
       });
       continue;
     }

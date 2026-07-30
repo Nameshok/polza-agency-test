@@ -130,7 +130,29 @@ async function main(): Promise<void> {
       `${before.address} → ${after.address}`,
     );
 
-    // ── 3. Ограничения схемы действительно работают ──
+    // ── 3. Настоящий ноль — это значение, и он ДОЛЖЕН перезаписать старое ──
+    // Без этой проверки регрессия вида `новое || старое` вместо `новое ?? старое`
+    // прошла бы и юнит-тесты, и проверку выше: она ловит только NULL.
+    await client.query('SAVEPOINT zero_case');
+    await upsertCompany(
+      client,
+      { ...same, reviewsCount: 0, rating: null },
+      { source: 'db_check', sourceFile: 'db.check.ts', sourceRow: 3 },
+    );
+    const zeroed = (
+      await client.query<{ reviews_count: number | null }>(
+        `SELECT reviews_count FROM companies WHERE external_id = $1`,
+        [before.external_id],
+      )
+    ).rows[0]!;
+    check(
+      'настоящий ноль отзывов перезаписывает старое значение',
+      zeroed.reviews_count === 0,
+      `ожидал 0, получил ${zeroed.reviews_count}`,
+    );
+    await client.query('ROLLBACK TO SAVEPOINT zero_case');
+
+    // ── 4. Ограничения схемы действительно работают ──
     for (const [label, sql] of [
       ['rating > 5 отвергается схемой', `UPDATE companies SET rating = 7.2 WHERE external_id = $1`],
       [

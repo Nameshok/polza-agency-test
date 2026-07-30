@@ -78,7 +78,7 @@ async function main(): Promise<void> {
         externalId: null,
         raw: { values: bad.values },
         status: 'rejected',
-        issues: [`column_count_${bad.actual}_expected_${bad.expected}`],
+        issues: [bad.reason],
       });
     }
 

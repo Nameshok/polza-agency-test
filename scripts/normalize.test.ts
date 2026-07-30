@@ -112,10 +112,23 @@ test('телефон: E.164 только из настоящих 11 цифр', (
 });
 
 test('ключ названия: кавычки и правовая форма не влияют на сравнение', () => {
+  // Сравнение двух вызовов тут недостаточно: если перестанет срезаться «АО»,
+  // форма останется с обеих сторон и тест всё равно будет зелёным. Поэтому
+  // каждая форма проверяется точным ожидаемым значением.
+  for (const form of ['ООО', 'ОАО', 'ЗАО', 'АО', 'ПАО', 'НАО', 'ИП']) {
+    assert.equal(nameKey(`${form} «Флагман Лаб»`), 'флагман лаб', `не срезано: ${form}`);
+    assert.equal(nameKey(`${form} Флагман Лаб`), 'флагман лаб', `не срезано без кавычек: ${form}`);
+  }
+  assert.equal(nameKey('«Прайм Плюс»'), 'прайм плюс');
+  assert.equal(nameKey('Прайм Плюс'), 'прайм плюс');
+
   // именно на этом ловятся дубли c_900006…c_900011
   assert.equal(nameKey('АО «Флагман Лаб»'), nameKey('АО Флагман Лаб'));
-  assert.equal(nameKey('«Прайм Плюс»'), nameKey('Прайм Плюс'));
-  assert.equal(nameKey('ООО «Восток Групп»'), 'восток групп');
+
+  // Правовая форма срезается только как отдельное слово: «Аонид» — не «АО» + «нид».
+  assert.equal(nameKey('«Аонид»'), 'аонид');
+  assert.equal(nameKey('Ипотека Плюс'), 'ипотека плюс');
+
   // разные компании остаются разными
   assert.notEqual(nameKey('АО «Сокол»'), nameKey('АО «Сокол Лаб»'));
 });
@@ -138,4 +151,17 @@ test('CSV: кавычки, CRLF, пустые строки, битая кавы�
   const unterminated = parseCsv('id,name\r\nc_1,"незакрытая кавычка');
   assert.equal(unterminated.rows.length, 0);
   assert.equal(unterminated.malformed.length, 1, 'файл кончился внутри кавычки');
+  assert.equal(unterminated.malformed[0]!.reason, 'unterminated_quote');
+
+  // Мусор после закрывающей кавычки: число колонок сходится, и «мягкий» парсер
+  // склеил бы имя в «ООО Ромашкаx» и отдал как валидную компанию.
+  const junk = parseCsv('id,name,city\r\nc_1,"ООО Ромашка"x,Москва\r\n');
+  assert.equal(junk.rows.length, 0, 'битая запись не должна считаться данными');
+  assert.equal(junk.malformed.length, 1);
+  assert.equal(junk.malformed[0]!.reason, 'junk_after_closing_quote');
+
+  // Нормальная строка в кавычках при этом остаётся валидной.
+  const quoted = parseCsv('id,address\r\nc_1,"ул. Садовая, д. 60, офис 376"\r\n');
+  assert.equal(quoted.malformed.length, 0);
+  assert.equal(quoted.rows[0]!.values[1], 'ул. Садовая, д. 60, офис 376');
 });

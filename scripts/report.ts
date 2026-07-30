@@ -176,6 +176,58 @@ UNION ALL SELECT 'компаний на мёртвых доменах', count(DI
         FROM t LEFT JOIN m ON m.code = t.code`),
   );
 
+  // Числа «13 городов без своего кода» и «264 компании» тоже должны пересчитываться,
+  // а не браться из текста. Ожидаемая доля совпадений считается по фактическому
+  // распределению кодов: это и есть честная база сравнения, а не справочник всех
+  // кодов России — на нём вывод получился бы противоположным.
+  section('Города без своего телефонного кода в выгрузке');
+  console.table(
+    await query(`
+      WITH m (code, city) AS (VALUES
+        ('495','Москва'),('499','Москва'),('812','Санкт-Петербург'),('843','Казань'),
+        ('831','Нижний Новгород'),('383','Новосибирск'),('863','Ростов-на-Дону'),
+        ('846','Самара'),('351','Челябинск'),('861','Краснодар'),('343','Екатеринбург'),
+        ('473','Воронеж'),('342','Пермь'),('347','Уфа'),('381','Омск'),('345','Тюмень'),
+        ('844','Волгоград'),('862','Сочи'),('484','Калуга'),('487','Тула'),('485','Ярославль')),
+      t AS (SELECT city_key, substring(phone_e164 from 3 for 3) AS code
+              FROM companies WHERE phone_e164 IS NOT NULL AND city_key IS NOT NULL),
+      land AS (SELECT * FROM t WHERE code NOT LIKE '9%'),
+      present AS (SELECT DISTINCT m.city FROM land JOIN m ON m.code = land.code)
+      SELECT count(DISTINCT land.city_key) FILTER (WHERE p.city IS NULL)::text AS городов_без_кода,
+             count(*) FILTER (WHERE p.city IS NULL)::text                      AS компаний_в_них,
+             round(100.0 * count(*) FILTER (WHERE p.city IS NULL) / count(*), 1)::text AS доля_процентов
+        FROM land LEFT JOIN present p ON p.city = land.city_key`),
+  );
+
+  section('Ожидаемая доля совпадений код↔город при случайной простановке');
+  console.table(
+    await query(`
+      WITH m (code, city) AS (VALUES
+        ('495','Москва'),('499','Москва'),('812','Санкт-Петербург'),('843','Казань'),
+        ('831','Нижний Новгород'),('383','Новосибирск'),('863','Ростов-на-Дону'),
+        ('846','Самара'),('351','Челябинск'),('861','Краснодар'),('343','Екатеринбург'),
+        ('473','Воронеж'),('342','Пермь'),('347','Уфа'),('381','Омск'),('345','Тюмень'),
+        ('844','Волгоград'),('862','Сочи'),('484','Калуга'),('487','Тула'),('485','Ярославль')),
+      land AS (SELECT city_key, substring(phone_e164 from 3 for 3) AS code
+                 FROM companies
+                WHERE phone_e164 IS NOT NULL AND city_key IS NOT NULL
+                  AND substring(phone_e164 from 3 for 3) NOT LIKE '9%'),
+      -- Частота каждого кода в самих данных: с ней и сравниваем.
+      freq AS (SELECT code, count(*)::numeric / (SELECT count(*) FROM land) AS p
+                 FROM land GROUP BY code),
+      -- Для каждой компании: вероятность, что случайный код из этого набора совпал бы.
+      per_row AS (SELECT land.city_key,
+                         coalesce((SELECT sum(freq.p) FROM freq JOIN m ON m.code = freq.code
+                                    WHERE m.city = land.city_key), 0) AS p_match
+                    FROM land)
+      SELECT count(*)::text                                        AS городских_номеров,
+             round(100.0 * avg(p_match), 1)::text                  AS ожидание_процентов,
+             round(100.0 * (SELECT count(*) FROM land JOIN m ON m.code = land.code
+                             WHERE m.city = land.city_key)::numeric / count(*), 1)::text
+                                                                   AS наблюдается_процентов
+        FROM per_row`),
+  );
+
   await getPool().end();
 }
 

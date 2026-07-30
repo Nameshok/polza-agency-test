@@ -1,0 +1,13 @@
+node_modules/
+.next/
+next-env.d.ts
+*.tsbuildinfo
+
+# Секретов в репозитории быть не должно — только .env.example
+.env
+.env.local
+.env.*.local
+
+# Отчёты загрузчиков пишутся локально
+out/
+*.log

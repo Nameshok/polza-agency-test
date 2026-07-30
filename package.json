@@ -1,0 +1,34 @@
+{
+  "name": "polza-test",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "db:schema": "tsx scripts/apply_schema.ts",
+    "db:reset": "tsx scripts/reset_db.ts",
+    "load:json": "tsx scripts/load_json.ts",
+    "load:csv": "tsx scripts/load_csv.ts",
+    "report": "tsx scripts/report.ts",
+    "queries": "tsx scripts/run_queries.ts",
+    "load:all": "npm run db:schema && npm run load:json && npm run load:csv && npm run report",
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test scripts/*.test.ts",
+    "test:db": "tsx scripts/db.check.ts"
+  },
+  "dependencies": {
+    "iconv-lite": "^0.6.3",
+    "next": "^15.1.6",
+    "pg": "^8.13.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.7",
+    "@types/pg": "^8.11.10",
+    "@types/react": "^19.0.7",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}

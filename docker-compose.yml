@@ -1,0 +1,23 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: polza_test_db
+    # Значения берутся из .env (см. .env.example). В самом репозитории пароля нет —
+    # без .env контейнер не поднимется, и это правильнее, чем зашитый по умолчанию.
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?скопируйте .env.example в .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?скопируйте .env.example в .env}
+      POSTGRES_DB: ${POSTGRES_DB:?скопируйте .env.example в .env}
+    ports:
+      # Наружу 55432, чтобы не спорить с уже установленным локально Postgres на 5432.
+      - "55432:5432"
+    volumes:
+      - polza_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  polza_pgdata:

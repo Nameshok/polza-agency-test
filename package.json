@@ -9,6 +9,7 @@
     "load:csv": "tsx scripts/load_csv.ts",
     "report": "tsx scripts/report.ts",
     "queries": "tsx scripts/run_queries.ts",
+    "emails": "tsx scripts/enrich_emails.ts",
     "load:all": "npm run db:schema && npm run load:json && npm run load:csv && npm run report",
     "dev": "next dev",
     "build": "next build",

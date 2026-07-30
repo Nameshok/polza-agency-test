@@ -95,3 +95,30 @@ CREATE TABLE IF NOT EXISTS duplicate_candidates (
   found_at      timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT duplicate_candidates_uniq UNIQUE (external_id, duplicate_of, match_reason)
 );
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 5. Кандидаты в email и результат их проверки.
+--    В выгрузке поля email нет (см. ANOMALIES.md), поэтому адреса здесь ВЫВЕДЕНЫ
+--    из домена сайта, а не получены из источника. Это догадки, и колонка source
+--    существует ровно для того, чтобы догадка никогда не смешалась с фактом:
+--    рассылка по неподтверждённым адресам сжигает домен отправителя.
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS email_candidates (
+  id            bigserial PRIMARY KEY,
+  external_id   text NOT NULL,                -- какой компании принадлежит
+  email         text NOT NULL,                -- адрес после исправления опечаток
+  local_part    text NOT NULL,
+  domain        text NOT NULL,
+  source        text NOT NULL CHECK (source IN ('derived_from_site', 'from_source')),
+  status        text NOT NULL CHECK (status IN ('valid', 'quarantined', 'rejected', 'unknown')),
+  -- На каком из шести этапов адрес выбыл. NULL — дошёл до конца.
+  stage_failed  text CHECK (stage_failed IN
+                  ('domain_typo', 'syntax', 'role', 'disposable', 'mx', 'smtp')),
+  issues        text[] NOT NULL DEFAULT '{}',
+  checked_at    timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT email_candidates_uniq UNIQUE (external_id, email)
+);
+
+CREATE INDEX IF NOT EXISTS email_candidates_status_idx ON email_candidates (status);
+CREATE INDEX IF NOT EXISTS email_candidates_domain_idx ON email_candidates (domain);
+CREATE INDEX IF NOT EXISTS email_candidates_stage_idx  ON email_candidates (stage_failed);

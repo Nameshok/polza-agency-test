@@ -62,16 +62,22 @@ async function main(): Promise<void> {
                   ORDER BY source_row`),
   );
 
-  section('Один сайт у нескольких компаний');
+  // Группировать надо по ДОМЕНУ, а не по строке site. Пока группировка шла по site,
+  // пара c_000219 / c_000829 не находилась: у одной компании домен записан как
+  // https://ip-715.ru, у другой — http://ip-715.ru. Сайтов в выгрузке 142 через http
+  // и 748 через https, так что промах был не единичной случайностью, а системным.
+  section('Один домен у нескольких компаний');
   console.table(
-    await query(`SELECT site, count(*) AS companies,
+    await query(`SELECT lower(regexp_replace(regexp_replace(site, '^https?://', ''), '^www\\.', ''))
+                          AS domain,
+                        count(*) AS companies,
                         string_agg(external_id || ' (' || coalesce(city_key, '?') || ')', ', '
                                    ORDER BY external_id) AS who
                    FROM companies
                   WHERE site IS NOT NULL
-                  GROUP BY site
+                  GROUP BY 1
                  HAVING count(*) > 1
-                  ORDER BY count(*) DESC, site`),
+                  ORDER BY count(*) DESC, 1`),
   );
 
   section('Кандидаты в дубли (одна компания под разными id)');

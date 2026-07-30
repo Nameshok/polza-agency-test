@@ -253,16 +253,20 @@ export function parseReviewsCount(raw: unknown): { value: number | null; issues:
   if (raw === null || raw === undefined || raw === '') {
     return { value: null, issues: ['reviews_missing'] };
   }
+  // Порядок проверок важен: отрицательное отсекаем ДО округления. Иначе «-10.5»
+  // округлилось бы в -10 и ушло в базу отрицательным числом — а там стоит
+  // CHECK (reviews_count >= 0), и весь прогон загрузки упал бы на этой строке.
+  // В данных задания такого значения нет, но порядок был неверным.
   if (typeof raw === 'number') {
-    if (!Number.isInteger(raw)) return { value: Math.round(raw), issues: ['reviews_not_integer'] };
     if (raw < 0) return { value: null, issues: ['reviews_negative'] };
+    if (!Number.isInteger(raw)) return { value: Math.round(raw), issues: ['reviews_not_integer'] };
     return { value: raw, issues: [] };
   }
   const text = String(raw).trim();
   if (!/^-?\d+(?:[.,]\d+)?$/.test(text)) return { value: null, issues: ['reviews_not_a_number'] };
   const parsed = Number(text.replace(',', '.'));
-  if (!Number.isInteger(parsed)) return { value: Math.round(parsed), issues: ['reviews_not_integer'] };
   if (parsed < 0) return { value: null, issues: ['reviews_negative'] };
+  if (!Number.isInteger(parsed)) return { value: Math.round(parsed), issues: ['reviews_not_integer'] };
   return { value: parsed, issues: [] };
 }
 

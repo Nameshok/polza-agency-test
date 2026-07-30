@@ -109,6 +109,73 @@ async function main(): Promise<void> {
       '  npm run load:json && npm run load:csv && npm run report',
   );
 
+  // Каждое число, названное в ANOMALIES.md, должно пересчитываться командой, а не
+  // приниматься на веру. Иначе документ — это утверждения о работе, а не сама работа.
+  section('Сверка чисел из ANOMALIES.md');
+  console.table(
+    await query(`
+      SELECT 'компаний всего' AS показатель, count(*)::text AS значение, '1183' AS в_документе FROM companies
+UNION ALL SELECT 'с сайтом', count(*)::text, '890' FROM companies WHERE site IS NOT NULL
+UNION ALL SELECT 'без сайта', count(*)::text, '293' FROM companies WHERE site IS NULL
+UNION ALL SELECT 'сайтов через https', count(*)::text, '748' FROM companies WHERE site LIKE 'https://%'
+UNION ALL SELECT 'сайтов через http', count(*)::text, '142' FROM companies WHERE site LIKE 'http://%'
+UNION ALL SELECT 'разных улиц', count(DISTINCT split_part(address, ', д.', 1))::text, '18'
+       FROM companies WHERE address IS NOT NULL
+UNION ALL SELECT 'макс. номер дома', max((regexp_match(address, 'д\\. (\\d+)'))[1]::int)::text, '120'
+       FROM companies WHERE address ~ 'д\\. \\d+'
+UNION ALL SELECT 'адресов с офисом', count(*)::text, '420' FROM companies WHERE address LIKE '%офис%'
+UNION ALL SELECT 'отзывы есть, рейтинга нет', count(*)::text, '81'
+       FROM companies WHERE rating IS NULL AND reviews_count > 0
+UNION ALL SELECT 'рейтинг есть, отзывов ноль', count(*)::text, '7'
+       FROM companies WHERE rating IS NOT NULL AND reviews_count = 0
+UNION ALL SELECT 'рейтинг неизвестен всего', count(*)::text, '100' FROM companies WHERE rating IS NULL
+UNION ALL SELECT '  из них пришли из API', count(*)::text, '79'
+       FROM companies WHERE rating IS NULL AND external_id < 'c_001001'
+UNION ALL SELECT '  из них новые из CSV', count(*)::text, '21'
+       FROM companies WHERE rating IS NULL AND external_id >= 'c_001001'
+UNION ALL SELECT 'кандидатов email', count(*)::text, '2670' FROM email_candidates
+UNION ALL SELECT 'из них valid', count(*)::text, '0' FROM email_candidates WHERE status = 'valid'
+UNION ALL SELECT 'из них unknown', count(*)::text, '9' FROM email_candidates WHERE status = 'unknown'
+UNION ALL SELECT 'отвергнуто на этапе MX', count(*)::text, '2661'
+       FROM email_candidates WHERE stage_failed = 'mx'
+UNION ALL SELECT 'доменов не существует', count(DISTINCT domain)::text, '877'
+       FROM email_candidates WHERE 'domain_does_not_exist' = ANY(issues)
+UNION ALL SELECT 'компаний на мёртвых доменах', count(DISTINCT external_id)::text, '884'
+       FROM email_candidates WHERE 'domain_does_not_exist' = ANY(issues)
+    `),
+  );
+
+  section('Один домен у нескольких компаний — сколько именно');
+  console.table(
+    await query(`
+      WITH d AS (SELECT lower(regexp_replace(regexp_replace(site, '^https?://', ''), '^www\\.', '')) AS dom
+                   FROM companies WHERE site IS NOT NULL),
+           s AS (SELECT dom, count(*) AS n FROM d GROUP BY dom HAVING count(*) > 1)
+      SELECT count(*)::text AS доменов_повторно, sum(n)::text AS компаний_на_них,
+             (sum(n) - count(*))::text AS лишних_записей FROM s`),
+  );
+
+  section('Коды телефонов против городов');
+  console.table(
+    await query(`
+      WITH t AS (
+        SELECT city_key, substring(phone_e164 from 3 for 3) AS code
+          FROM companies WHERE phone_e164 IS NOT NULL AND city_key IS NOT NULL),
+      m (code, city) AS (VALUES
+        ('495','Москва'),('499','Москва'),('812','Санкт-Петербург'),('843','Казань'),
+        ('831','Нижний Новгород'),('383','Новосибирск'),('863','Ростов-на-Дону'),
+        ('846','Самара'),('351','Челябинск'),('861','Краснодар'),('343','Екатеринбург'),
+        ('473','Воронеж'),('342','Пермь'),('347','Уфа'),('381','Омск'),('345','Тюмень'),
+        ('844','Волгоград'),('862','Сочи'),('484','Калуга'),('487','Тула'),('485','Ярославль'))
+      SELECT count(*) FILTER (WHERE t.code LIKE '9%')::text                       AS мобильных,
+             count(*) FILTER (WHERE t.code NOT LIKE '9%')::text                   AS городских,
+             count(*) FILTER (WHERE m.city = t.city_key)::text                    AS код_совпал,
+             count(*) FILTER (WHERE t.code NOT LIKE '9%' AND m.city IS DISTINCT FROM t.city_key)::text
+                                                                                  AS код_не_совпал,
+             count(DISTINCT t.code) FILTER (WHERE t.code NOT LIKE '9%')::text     AS разных_кодов
+        FROM t LEFT JOIN m ON m.code = t.code`),
+  );
+
   await getPool().end();
 }
 

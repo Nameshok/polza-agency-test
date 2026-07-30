@@ -67,6 +67,15 @@ test('число отзывов: неизвестное — NULL, а не 0', ()
   // строка 98 CSV
   assert.equal(parseReviewsCount('45.5').value, 46);
   assert.equal(parseReviewsCount('').value, null);
+
+  // Отрицательное дробное: в данных задания такого нет, но порядок проверок
+  // раньше был неверным — округление шло ПЕРЕД проверкой знака, и -10.5 уехало бы
+  // в базу как -10, где стоит CHECK (reviews_count >= 0). Загрузка упала бы целиком.
+  for (const bad of ['-10.5', '-0.4', -10.5]) {
+    const r = parseReviewsCount(bad as string | number);
+    assert.equal(r.value, null, `отрицательное ${bad} обязано стать NULL, а не округлиться`);
+    assert.ok(r.issues.includes('reviews_negative'));
+  }
 });
 
 test('город: регистр, транслит, опечатка, пробел и адрес в поле города', () => {

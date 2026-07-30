@@ -19,7 +19,6 @@
  * без подтверждения нельзя — это худший способ сжечь домен отправителя.
  */
 import { promises as dns } from 'node:dns';
-import net from 'node:net';
 import { getPool, query } from '../lib/db';
 import { loadEnv, requireEnv } from './lib/env';
 import {
@@ -30,6 +29,7 @@ import {
   interpretSmtp,
   type EmailVerdict,
 } from './lib/email';
+import { smtpProbe } from './lib/smtp';
 
 loadEnv();
 requireEnv('DATABASE_URL');
@@ -136,71 +136,8 @@ async function lookupDomain(domain: string): Promise<DomainFacts> {
   };
 }
 
-type SmtpAnswer = 'accepted' | 'rejected' | 'catch_all' | 'unknown';
-type RcptAnswer = 'accepted' | 'rejected' | 'unknown';
-
-const SMTP_DEADLINE_MS = 15000;
-
-/**
- * Одна SMTP-сессия: спросить у сервера про конкретный ящик. Команда DATA не
- * отправляется никогда — письмо не уходит, спрашиваем только про адрес.
- */
-function smtpRcpt(mxHost: string, email: string): Promise<RcptAnswer> {
-  return new Promise((resolve) => {
-    const socket = net.createConnection({ host: mxHost, port: 25, timeout: 10000 });
-    let stage = 0;
-    // Сервер может просто закрыть соединение. Без обработчиков end/close промис
-    // не завершался бы никогда, и прогон с --smtp вис навсегда. Плюс общий дедлайн
-    // на сессию и одноразовый done, чтобы не резолвить дважды.
-    let settled = false;
-    const done = (value: RcptAnswer) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(deadline);
-      socket.destroy();
-      resolve(value);
-    };
-    const deadline = setTimeout(() => done('unknown'), SMTP_DEADLINE_MS);
-
-    socket.on('error', () => done('unknown'));
-    socket.on('timeout', () => done('unknown'));
-    socket.on('end', () => done('unknown'));
-    socket.on('close', () => done('unknown'));
-    socket.on('data', (chunk) => {
-      const code = Number(chunk.toString().slice(0, 3));
-      if (stage === 0 && code === 220) {
-        socket.write('HELO polza-test.local\r\n');
-        stage = 1;
-      } else if (stage === 1 && code === 250) {
-        socket.write('MAIL FROM:<check@polza-test.local>\r\n');
-        stage = 2;
-      } else if (stage === 2 && code === 250) {
-        socket.write(`RCPT TO:<${email}>\r\n`);
-        stage = 3;
-      } else if (stage === 3) {
-        socket.write('QUIT\r\n');
-        done(code >= 200 && code < 300 ? 'accepted' : code >= 500 ? 'rejected' : 'unknown');
-      } else if (code >= 400) {
-        done('unknown');
-      }
-    });
-  });
-}
-
-/**
- * Этап 6 целиком. Одного вопроса про нужный ящик мало: catch-all-домен отвечает
- * согласием на любой адрес, и «accepted» от него ничего не значит. Поэтому вторым
- * вопросом идёт заведомо несуществующий адрес того же домена: если сервер принял
- * и его тоже — это catch-all, и результат не подтверждение, а карантин.
- */
-async function smtpProbe(mxHost: string, email: string): Promise<SmtpAnswer> {
-  const real = await smtpRcpt(mxHost, email);
-  if (real !== 'accepted') return interpretSmtp(real, 'unknown');
-
-  const domain = email.slice(email.lastIndexOf('@') + 1);
-  const control = await smtpRcpt(mxHost, `no-such-mailbox-polza-check@${domain}`);
-  return interpretSmtp(real, control);
-}
+// SMTP-этап живёт в scripts/lib/smtp.ts: там он покрыт тестами против локального
+// поддельного сервера. Здесь остаётся только вызов.
 
 async function main(): Promise<void> {
   const companies = await query<CompanyRow>(
@@ -269,7 +206,12 @@ async function main(): Promise<void> {
     console.log('SMTP-этап включён, адресов к проверке: %d', probeable.length);
     for (const c of probeable) {
       const host = byDomain.get(c.verdict.domain)?.mxHost;
-      if (host) smtpAnswers.set(c.verdict.normalized, await smtpProbe(host, c.verdict.normalized));
+      if (!host) continue;
+      const answer = await smtpProbe(
+        { host, email: c.verdict.normalized },
+        interpretSmtp,
+      );
+      smtpAnswers.set(c.verdict.normalized, answer);
     }
   } else {
     const probeable = candidates.filter((c) => byDomain.get(c.verdict.domain)?.hasMx).length;
